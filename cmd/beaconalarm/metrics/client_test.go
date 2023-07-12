@@ -10,12 +10,11 @@ import (
 )
 
 func Test_Client(t *testing.T) {
-	// Create an HTTP client with OAuth2 authentication using a custom RoundTripper
 	c, err := NewClient("http://localhost:9090")
 	require.NoError(t, err)
 
-	value, err := c.FetchMetricValue(context.Background(), beacon.MetricNameCalculatedWeight(), 11)
+	value, err := c.FetchBeaconValue(context.Background(), beacon.MetricNameCalculatedWeight())
 	require.NoError(t, err)
 
-	require.Equal(t, 0.0, value)
+	require.Equal(t, "ca702962", value)
 }

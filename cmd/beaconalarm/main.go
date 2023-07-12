@@ -54,7 +54,7 @@ func main() {
 			case <-time.After(5 * time.Second):
 				// Fetch the metric value from the Prometheus server
 				observedMetric := beacon.MetricNameCalculatedWeight()
-				_, err := client.FetchMetricValue(ctx, observedMetric, 0)
+				_, err := client.FetchBeaconValue(ctx, observedMetric)
 				if err != nil {
 					log.Println("Failed to fetch metric value", err)
 				}
