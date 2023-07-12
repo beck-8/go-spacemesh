@@ -40,11 +40,11 @@ func (c *Client) FetchBeaconValue(ctx context.Context, epoch int) (string, error
 	lid := types.EpochID(epoch).FirstLayer()
 	ts := c.clock.LayerToTime(lid)
 
-	ts, err := time.Parse(time.RFC3339, "2023-07-11T18:50:00+02:00")
+	ts, err := time.Parse(time.RFC3339, "2023-07-12T10:15:00+02:00")
 	if err != nil {
 		return "", fmt.Errorf("failed to parse time: %w", err)
 	}
-	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{epoch="517"})`, beacon.MetricNameCalculatedWeight()), ts)
+	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{kubernetes_namespace="testnet-05",epoch="21"})`, beacon.MetricNameCalculatedWeight()), ts)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch metric: %w", err)
 	}
