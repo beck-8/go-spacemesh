@@ -9,13 +9,19 @@ import (
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+
+	beacon "github.com/spacemeshos/go-spacemesh/beacon/metrics"
+	"github.com/spacemeshos/go-spacemesh/common/types"
+	"github.com/spacemeshos/go-spacemesh/timesync"
 )
 
 type Client struct {
 	client v1.API
+
+	clock *timesync.NodeClock
 }
 
-func NewClient(url string) (*Client, error) {
+func NewClient(url string, clock *timesync.NodeClock) (*Client, error) {
 	client, err := api.NewClient(api.Config{
 		Address: url,
 	})
@@ -26,15 +32,19 @@ func NewClient(url string) (*Client, error) {
 	api := v1.NewAPI(client)
 	return &Client{
 		client: api,
+		clock:  clock,
 	}, nil
 }
 
-func (c *Client) FetchBeaconValue(ctx context.Context, metric string) (string, error) {
+func (c *Client) FetchBeaconValue(ctx context.Context, epoch int) (string, error) {
+	lid := types.EpochID(epoch).FirstLayer()
+	ts := c.clock.LayerToTime(lid)
+
 	ts, err := time.Parse(time.RFC3339, "2023-07-11T18:50:00+02:00")
 	if err != nil {
 		return "", fmt.Errorf("failed to parse time: %w", err)
 	}
-	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{epoch="517"})`, metric), ts)
+	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{epoch="517"})`, beacon.MetricNameCalculatedWeight()), ts)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch metric: %w", err)
 	}

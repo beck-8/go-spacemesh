@@ -8,8 +8,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	spacemesh "github.com/spacemeshos/go-spacemesh/metrics"
 	"golang.org/x/sync/errgroup"
 )
+
+const subsystem = "beacons"
 
 type Server struct {
 	started chan struct{}
@@ -20,10 +23,10 @@ type Server struct {
 	gauge prometheus.Gauge
 }
 
-func NewServer(addr, metricName string) (*Server, error) {
+func NewServer(addr string) (*Server, error) {
 	// Create a new Gauge metric to be pushed to the Prometheus server
 	metric := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: metricName,
+		Name: prometheus.BuildFQName(spacemesh.Namespace, subsystem, "beacon_alarm"),
 		Help: "A sample metric pushed to Prometheus",
 	})
 
