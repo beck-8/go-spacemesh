@@ -8,8 +8,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	spacemesh "github.com/spacemeshos/go-spacemesh/metrics"
 	"golang.org/x/sync/errgroup"
+
+	spacemesh "github.com/spacemeshos/go-spacemesh/metrics"
 )
 
 const subsystem = "beacons"

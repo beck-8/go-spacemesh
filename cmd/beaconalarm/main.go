@@ -41,6 +41,7 @@ func getCommand() *cobra.Command {
 			if conf.LOGGING.Encoder == config.JSONLogEncoder {
 				log.JSONLog(true)
 			}
+			logger := log.NewDefault("main")
 
 			// Create a context for graceful shutdown
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -49,23 +50,23 @@ func getCommand() *cobra.Command {
 			// Start the clock
 			clock, err := setupClock()
 			if err != nil {
-				log.With().Fatal("failed to setup clock", log.Err(err))
+				logger.With().Fatal("failed to setup clock", log.Err(err))
 			}
 
 			// Start the server
 			server, err := metrics.NewServer(":8080")
 			if err != nil {
-				log.With().Fatal("failed to create server", log.Err(err))
+				logger.With().Fatal("failed to create server", log.Err(err))
 			}
 			if err := server.Start(); err != nil {
-				log.With().Fatal("failed to start server", log.Err(err))
+				logger.With().Fatal("failed to start server", log.Err(err))
 			}
 
 			// Start the client
-			client, err := metrics.NewClient(serverURL, clock)
+			client, err := metrics.NewClient(serverURL, conf.Beacon, log.NewDefault("client"), clock)
 			if err != nil {
 				shutdownServer(server)
-				log.With().Fatal("failed to create client", log.Err(err))
+				logger.With().Fatal("failed to create client", log.Err(err))
 			}
 
 			var eg errgroup.Group
@@ -79,14 +80,14 @@ func getCommand() *cobra.Command {
 						// Fetch the metric value from the Prometheus server
 						_, err := client.FetchBeaconValue(ctx, 11)
 						if err != nil {
-							log.With().Error("failed to beacon value", log.Err(err))
+							logger.With().Error("failed to beacon value", log.Err(err))
 						}
 					}
 				}
 			})
 
 			if err := eg.Wait(); err != nil {
-				log.With().Fatal("failed to wait for goroutines", log.Err(err))
+				logger.With().Fatal("failed to wait for goroutines", log.Err(err))
 			}
 		},
 	}
