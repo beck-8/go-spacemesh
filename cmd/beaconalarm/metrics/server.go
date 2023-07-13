@@ -21,15 +21,15 @@ type Server struct {
 	server  *http.Server
 	eg      errgroup.Group
 
-	gauge prometheus.Gauge
+	metric *prometheus.GaugeVec
 }
 
 func NewServer(addr string) (*Server, error) {
 	// Create a new Gauge metric to be pushed to the Prometheus server
-	metric := prometheus.NewGauge(prometheus.GaugeOpts{
+	metric := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: prometheus.BuildFQName(spacemesh.Namespace, subsystem, "beacon_alarm"),
-		Help: "A sample metric pushed to Prometheus",
-	})
+		Help: "Alarm if consensus on beacon value is not reached.",
+	}, []string{"epoch"})
 
 	// Register the metric with the default registry
 	if err := prometheus.Register(metric); err != nil {
@@ -43,6 +43,7 @@ func NewServer(addr string) (*Server, error) {
 			Addr:    addr,
 			Handler: promhttp.Handler(),
 		},
+		metric: metric,
 	}, nil
 }
 
@@ -88,7 +89,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) UpdateMetric(value float64) error {
+func (s *Server) UpdateAlarm(epoch string, alarm bool) error {
 	select {
 	case <-s.started:
 	default:
@@ -101,6 +102,11 @@ func (s *Server) UpdateMetric(value float64) error {
 	default:
 	}
 
-	s.gauge.Set(42)
+	gauge := s.metric.With(prometheus.Labels{"epoch": epoch})
+	if alarm {
+		gauge.Set(1)
+		return nil
+	}
+	gauge.Set(0)
 	return nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -19,7 +20,10 @@ import (
 	"github.com/spacemeshos/go-spacemesh/timesync"
 )
 
-var serverURL string
+var (
+	serverURL    string
+	k8sNamespace string
+)
 
 func main() {
 	if err := getCommand().Execute(); err != nil {
@@ -61,28 +65,42 @@ func getCommand() *cobra.Command {
 			if err := server.Start(); err != nil {
 				logger.With().Fatal("failed to start server", log.Err(err))
 			}
+			defer shutdownServer(server, logger)
+
+			clientOpts := []metrics.ClientOptionFunc{
+				metrics.WithURL(serverURL),
+				metrics.WithBeaconConfig(conf.Beacon),
+				metrics.WithLogger(log.NewDefault("client")),
+				metrics.WithClock(clock),
+			}
+			if os.Getenv("MIMIR_USR") != "" && os.Getenv("MIMIR_PWD") != "" && os.Getenv("MIMIR_ORG") != "" {
+				clientOpts = append(clientOpts, metrics.WithBasicAuth(os.Getenv("MIMIR_ORG"), os.Getenv("MIMIR_USR"), os.Getenv("MIMIR_PWD")))
+			}
 
 			// Start the client
-			client, err := metrics.NewClient(serverURL, conf.Beacon, log.NewDefault("client"), clock)
+			client, err := metrics.NewClient(clientOpts...)
 			if err != nil {
-				shutdownServer(server)
 				logger.With().Fatal("failed to create client", log.Err(err))
 			}
 
 			var eg errgroup.Group
 			eg.Go(func() error {
-				for {
-					select {
-					case <-ctx.Done():
-						shutdownServer(server)
+				logger.Info("starting alarm")
+
+				for epoch := types.EpochID(2); ; epoch++ {
+					// Fetch the metric value from the Prometheus server
+					value, err := client.FetchBeaconValue(ctx, k8sNamespace, epoch)
+					switch {
+					case errors.Is(err, context.Canceled):
 						return nil
-					case <-time.After(5 * time.Second):
-						// Fetch the metric value from the Prometheus server
-						_, err := client.FetchBeaconValue(ctx, 11)
-						if err != nil {
-							logger.With().Error("failed to beacon value", log.Err(err))
-						}
+					case err != nil:
+						logger.With().Error("failed to fetch beacon value", log.Err(err))
+						server.UpdateAlarm(epoch.String(), true)
+						continue
+					default:
 					}
+					logger.With().Info("beacon value fetched", log.FieldNamed("epoch", epoch), log.String("value", value))
+					server.UpdateAlarm(epoch.String(), false)
 				}
 			})
 
@@ -93,7 +111,9 @@ func getCommand() *cobra.Command {
 	}
 
 	cmd.AddCommands(c)
-	c.PersistentFlags().StringVar(&serverURL, "prometheus", "http://localhost:9090", "Prometheus server URL")
+
+	c.PersistentFlags().StringVar(&serverURL, "prometheus", "https://mimir.spacemesh.dev/prometheus", "Prometheus server URL")
+	c.PersistentFlags().StringVar(&k8sNamespace, "k8sNamespace", "devnet-402-short", "Kubernetes namespace to monitor")
 	return c
 }
 
@@ -108,8 +128,8 @@ func loadConfig(c *cobra.Command) (*config.Config, error) {
 	return conf, nil
 }
 
-func shutdownServer(server *metrics.Server) {
-	log.Info("Shutting down server...")
+func shutdownServer(server *metrics.Server, logger log.Logger) {
+	logger.Info("Shutting down server...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := server.Stop(shutdownCtx); err != nil {

@@ -3,13 +3,13 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
 
-	"github.com/spacemeshos/go-spacemesh/beacon"
 	beaconMetrics "github.com/spacemeshos/go-spacemesh/beacon/metrics"
 	"github.com/spacemeshos/go-spacemesh/common/types"
 	"github.com/spacemeshos/go-spacemesh/log"
@@ -24,43 +24,68 @@ type Client struct {
 	clock  *timesync.NodeClock
 }
 
-func NewClient(url string, cfg beacon.Config, logger log.Logger, clock *timesync.NodeClock) (*Client, error) {
+func NewClient(opts ...ClientOptionFunc) (*Client, error) {
+	options := &clientOption{
+		logger:       log.NewNop(),
+		roundTripper: http.DefaultTransport,
+	}
+
+	for _, opt := range opts {
+		if err := opt(options); err != nil {
+			return nil, fmt.Errorf("failed to apply client option: %w", err)
+		}
+	}
+	if err := options.validate(); err != nil {
+		return nil, fmt.Errorf("invalid client options: %w", err)
+	}
+
+	// Create a custom HTTP client with authentication
 	client, err := api.NewClient(api.Config{
-		Address: url,
+		Address:      options.url,
+		RoundTripper: options.roundTripper,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Prometheus client: %w", err)
 	}
 
-	offset := cfg.ProposalDuration + cfg.FirstVotingRoundDuration + time.Duration(cfg.RoundsNumber-1)*(cfg.VotingRoundDuration+cfg.WeakCoinRoundDuration)
-	logger.With().Info("using alarm offset",
+	offset := options.cfg.ProposalDuration + options.cfg.FirstVotingRoundDuration + time.Duration(options.cfg.RoundsNumber-1)*(options.cfg.VotingRoundDuration+options.cfg.WeakCoinRoundDuration)
+	options.logger.With().Info("using alarm offset",
 		log.Duration("offset", offset),
-		log.Duration("proposalDuration", cfg.ProposalDuration),
-		log.Duration("firstVotingRoundDuration", cfg.FirstVotingRoundDuration),
-		log.Duration("votingRoundDuration", cfg.VotingRoundDuration),
-		log.Duration("weakCoinRoundDuration", cfg.WeakCoinRoundDuration),
-		log.FieldNamed("roundsNumber", cfg.RoundsNumber),
+		log.Duration("proposalDuration", options.cfg.ProposalDuration),
+		log.Duration("firstVotingRoundDuration", options.cfg.FirstVotingRoundDuration),
+		log.Duration("votingRoundDuration", options.cfg.VotingRoundDuration),
+		log.Duration("weakCoinRoundDuration", options.cfg.WeakCoinRoundDuration),
+		log.FieldNamed("roundsNumber", options.cfg.RoundsNumber),
 	)
 
 	return &Client{
 		offset: offset,
 		client: v1.NewAPI(client),
-		logger: logger,
-		clock:  clock,
+		logger: options.logger,
+		clock:  options.clock,
 	}, nil
 }
 
-func (c *Client) FetchBeaconValue(ctx context.Context, epoch int) (string, error) {
-	lid := types.EpochID(epoch).FirstLayer()
-	ts := c.clock.LayerToTime(lid)
-	ts = ts.Add(c.offset)
-	c.logger.With().Info("fetching beacon value", log.Int("epoch", epoch), log.Time("ts", ts))
+func (c *Client) FetchBeaconValue(ctx context.Context, namespace string, epoch types.EpochID) (string, error) {
+	c.logger.With().Info("waiting for beacon value", log.FieldNamed("target_epoch", epoch))
 
-	ts, err := time.Parse(time.RFC3339, "2023-07-11T23:10:00+00:00")
-	if err != nil {
-		return "", fmt.Errorf("failed to parse time: %w", err)
+	lid := types.EpochID(epoch - 1).FirstLayer()
+	ts := c.clock.LayerToTime(lid)
+	ts = ts.Add(c.offset).Add(30 * time.Second) // Add 30 seconds to account for the time it takes to fetch the metric from nodes
+
+	c.logger.With().Info("waiting for beacon value", log.FieldNamed("target_epoch", epoch), log.Time("ts", ts))
+
+	timer := time.NewTimer(time.Until(ts))
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-timer.C:
 	}
-	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{kubernetes_namespace="testnet-05",epoch="%d"})`, beaconMetrics.MetricNameCalculatedWeight(), epoch+1), ts)
+
+	c.logger.With().Info("fetching beacon value", log.FieldNamed("target_epoch", epoch), log.Time("ts", ts))
+	result, warnings, err := c.client.Query(ctx, fmt.Sprintf(`group by(beacon) (%s{kubernetes_namespace="%s",epoch="%d"})`, beaconMetrics.MetricNameCalculatedWeight(), namespace, epoch), ts)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch metric: %w", err)
 	}
@@ -71,7 +96,7 @@ func (c *Client) FetchBeaconValue(ctx context.Context, epoch int) (string, error
 	// Check if the result is a vector
 	vector, ok := result.(model.Vector)
 	if !ok {
-		return "", fmt.Errorf("Query result is not a vector")
+		return "", fmt.Errorf("query result is not a vector")
 	}
 
 	if len(vector) != 1 {
@@ -79,6 +104,6 @@ func (c *Client) FetchBeaconValue(ctx context.Context, epoch int) (string, error
 	}
 
 	beaconValue := string(vector[0].Metric["beacon"])
-	log.With().Info("fetched beacon value", log.String("beacon", beaconValue))
+	c.logger.With().Info("fetched beacon value", log.String("beacon", beaconValue))
 	return beaconValue, nil
 }
